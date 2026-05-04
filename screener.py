@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,8 +5,10 @@ import plotly.graph_objects as go
 import requests
 
 # --- Page Config ---
+# This MUST be the first Streamlit command in the script
 st.set_page_config(page_title="Shariah Stock Screener", layout="wide", initial_sidebar_state="expanded")
 
+# Custom CSS for tighter spacing
 st.markdown("""
     <style>
     .block-container { padding-top: 2rem; padding-bottom: 2rem; }
@@ -26,10 +27,12 @@ st.markdown("Powered by Financial Modeling Prep (FMP) | Automated Technicals, Fu
 @st.cache_data
 def load_stock_list():
     try:
+        # Attempts to load the official NSE list if you uploaded EQUITY_L.csv
         df = pd.read_csv("EQUITY_L.csv")
         df['Display'] = df['SYMBOL'] + " - " + df['NAME OF COMPANY']
         return ["✏️ Type Custom Ticker..."] + df['Display'].tolist()
     except Exception:
+        # Fallback list if the CSV file is not found
         return ["✏️ Type Custom Ticker...", "RELIANCE - Reliance", "TCS - TCS", "HDFCBANK - HDFC Bank"]
 
 POPULAR_STOCKS = load_stock_list()
@@ -38,7 +41,7 @@ WATCHLIST = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", 
 # --- FMP FETCH FUNCTIONS ---
 @st.cache_data(ttl=3600) 
 def fetch_fmp_data(ticker, key):
-    # Fetch Company Profile (Sector, Industry, Name)
+    # API Endpoints
     profile_url = f"[https://financialmodelingprep.com/api/v3/profile/](https://financialmodelingprep.com/api/v3/profile/){ticker}?apikey={key}"
     bs_url = f"[https://financialmodelingprep.com/api/v3/balance-sheet-statement/](https://financialmodelingprep.com/api/v3/balance-sheet-statement/){ticker}?limit=5&apikey={key}"
     inc_url = f"[https://financialmodelingprep.com/api/v3/income-statement/](https://financialmodelingprep.com/api/v3/income-statement/){ticker}?limit=5&apikey={key}"
@@ -54,7 +57,7 @@ def fetch_fmp_data(ticker, key):
         financials = pd.DataFrame(inc_data)
         
         return info, bs, financials
-    except Exception as e:
+    except Exception:
         return {}, pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -63,17 +66,18 @@ def fetch_fmp_prices(ticker, key):
     try:
         data = requests.get(url).json()
         if 'historical' in data:
-            # Convert JSON to DataFrame
+            # Convert JSON to DataFrame and set up dates
             hist_daily = pd.DataFrame(data['historical'])
             hist_daily['date'] = pd.to_datetime(hist_daily['date'])
-            # FMP returns newest dates first. We must sort oldest to newest for moving averages!
+            
+            # Sort oldest to newest for accurate moving average calculations
             hist_daily = hist_daily.sort_values('date').reset_index(drop=True)
             hist_daily.set_index('date', inplace=True)
             
-            # Rename 'close' to 'Close' to match our existing logic
+            # Rename for consistency
             hist_daily.rename(columns={'close': 'Close'}, inplace=True)
             
-            # Instantly calculate Weekly data by resampling the daily prices
+            # Generate Weekly data using Pandas resampling
             hist_weekly = hist_daily['Close'].resample('W').last().to_frame()
             
             return hist_daily, hist_weekly
@@ -82,15 +86,20 @@ def fetch_fmp_prices(ticker, key):
         return None, None
 
 def create_price_chart(hist_daily):
+    # Plot the last 252 trading days (approx 1 year)
     df_chart = hist_daily.tail(252)
     fig = go.Figure()
+    
+    # Base Price Line
     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['Close'], mode='lines', name='Close Price', line=dict(color='#2962FF', width=2)))
     
+    # Add Moving Averages if they were calculated
     if 'EMA_50' in df_chart.columns:
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_50'], mode='lines', name='50 DEMA', line=dict(color='#FF6D00', width=1.5, dash='dot')))
     if 'EMA_200' in df_chart.columns:
         fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA_200'], mode='lines', name='200 DEMA', line=dict(color='#00C853', width=1.5, dash='dot')))
     
+    # Layout styling
     fig.update_layout(title="1-Year Price Trend & EMAs", margin=dict(l=10, r=10, t=40, b=10), height=350, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
@@ -106,6 +115,7 @@ with tab1:
     if not api_key:
         st.warning("👈 Please enter your FMP API Key in the sidebar to begin using the application.")
     else:
+        # Search UI Container
         with st.container(border=True):
             search_col1, search_col2, search_col3, search_col4 = st.columns([2, 1, 1, 1])
 
@@ -125,21 +135,21 @@ with tab1:
             with search_col4:
                 analyze_button = st.button("🔍 Analyze Stock", use_container_width=True, type="primary")
 
-        # Ticker format for FMP (matches yfinance!)
+        # Format ticker properly for the API
         base_symbol = ticker_input.split('.')[0]
         fmp_ticker = f"{base_symbol}.NS" if exchange == "NSE" else f"{base_symbol}.BO"
 
         if analyze_button:
             with st.spinner(f"Compiling dashboard for {fmp_ticker}..."):
+                # Fetch all data
                 info, bs, financials = fetch_fmp_data(fmp_ticker, api_key)
                 hist_daily, hist_weekly = fetch_fmp_prices(fmp_ticker, api_key)
                 
                 if bs is None or bs.empty or hist_daily is None or hist_daily.empty:
                     st.error(f"❌ Could not fetch data for {fmp_ticker}. Ensure the API key is correct and the ticker exists.")
                 else:
+                    # Calculations
                     current_price = hist_daily['Close'].iloc[-1]
-                    
-                    # Exponential Moving Averages (DEMA)
                     hist_daily['EMA_50'] = hist_daily['Close'].ewm(span=50, adjust=False).mean()
                     hist_daily['EMA_200'] = hist_daily['Close'].ewm(span=200, adjust=False).mean()
                     
@@ -147,6 +157,7 @@ with tab1:
                     sector = info.get('sector', 'Unknown')
                     industry = info.get('industry', 'Unknown')
                     
+                    # Dashboard Header
                     head_col1, head_col2 = st.columns([3, 1])
                     with head_col1:
                         st.markdown(f"## {company_name} ({fmp_ticker})")
@@ -154,8 +165,8 @@ with tab1:
                     with head_col2:
                         st.markdown(f"<h2 style='text-align: right; color: #00C853;'>₹{current_price:,.2f}</h2>", unsafe_allow_html=True)
                     
+                    # Row 1: Chart and Returns
                     row1_col1, row1_col2 = st.columns([2, 1])
-                    
                     with row1_col1:
                         with st.container(border=True):
                             st.plotly_chart(create_price_chart(hist_daily), use_container_width=True)
@@ -173,13 +184,13 @@ with tab1:
                             st.divider()
                             st.metric("3-Year Return", f"{ret_3y:.2f}%" if ret_3y else "N/A")
 
-                    # --- FUNDAMENTAL ANALYSIS BLOCK ---
+                    # Row 2: Fundamental Analysis
                     with st.container(border=True):
                         st.markdown("#### 🏢 Fundamental Analysis")
                         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
                         
                         try:
-                            # FMP returns index 0 as the most recent year
+                            # 1 Year Ratios
                             net_income_1y = financials['netIncome'].iloc[0]
                             equity_1y = bs['totalStockholdersEquity'].iloc[0]
                             ebit_1y = financials['operatingIncome'].iloc[0]
@@ -188,7 +199,7 @@ with tab1:
                             roe_1y = (net_income_1y / equity_1y) * 100 if equity_1y else 0
                             roce_1y = (ebit_1y / capital_employed_1y) * 100 if capital_employed_1y else 0
                             
-                            # 3 Years Ago (Index 3 or oldest)
+                            # 3 Year Ratios
                             idx_3y = min(3, len(financials) - 1)
                             net_income_3y = financials['netIncome'].iloc[idx_3y]
                             equity_3y = bs['totalStockholdersEquity'].iloc[idx_3y]
@@ -198,7 +209,7 @@ with tab1:
                             roe_3y = (net_income_3y / equity_3y) * 100 if equity_3y else 0
                             roce_3y = (ebit_3y / capital_employed_3y) * 100 if capital_employed_3y else 0
 
-                        except Exception as e:
+                        except Exception:
                             roe_1y, roce_1y, roe_3y, roce_3y = 0, 0, 0, 0
 
                         f_col1.metric("ROE (1 Year)", f"{roe_1y:.2f}%")
@@ -216,7 +227,7 @@ with tab1:
                         p_col4.metric("Q4", "N/A")
                         p_col5.metric("Q5", "N/A")
 
-                    # --- TECHNICAL ANALYSIS BLOCK ---
+                    # Row 3: Technical Analysis
                     with st.container(border=True):
                         st.markdown("#### ⚙️ Technical Analysis")
                         t_col1, t_col2, t_col3, t_col4 = st.columns(4)
@@ -239,11 +250,10 @@ with tab1:
                         t_col3.metric("vs 52W High", f"{dist_52w:.2f}%")
                         t_col4.metric("vs ATH", f"{dist_ath:.2f}%")
 
-                    # --- AAOIFI BLOCK ---
+                    # Row 4: AAOIFI Shariah Ratios
                     with st.container(border=True):
                         st.markdown("#### ⚖️ AAOIFI Financial Ratios")
                         try:
-                            # FMP uses straightforward JSON keys
                             total_assets = bs['totalAssets'].iloc[0]
                             total_debt = bs['totalDebt'].iloc[0]
                             cash_and_equiv = bs.get('cashAndCashEquivalents', pd.Series([0])).iloc[0]
@@ -274,7 +284,7 @@ with tab1:
                                     st.error("🔴 **Verdict: NON-COMPLIANT**")
                             else:
                                 st.warning("Financial data (Assets/Revenue) is zero or missing.")
-                        except Exception as e:
+                        except Exception:
                             st.error("⚠️ Incomplete data from FMP to calculate Shariah ratios.")
 
 # ==========================================
@@ -299,12 +309,10 @@ with tab2:
             for i, ticker in enumerate(WATCHLIST):
                 try:
                     my_bar.progress(int(((i + 1) / len(WATCHLIST)) * 100), text=f"Scanning {ticker}...")
-                    
                     hist_d, hist_w = fetch_fmp_prices(ticker, api_key)
                     
                     if hist_d is not None and not hist_d.empty:
                         current_price = hist_d['Close'].iloc[-1]
-                        
                         ema_50 = hist_d['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
                         ema_200 = hist_d['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
                         wema_30 = hist_w['Close'].ewm(span=30, adjust=False).mean().iloc[-1]
@@ -325,7 +333,7 @@ with tab2:
                                 "200 DEMA": round(ema_200, 2),
                                 "30 WEMA": round(wema_30, 2)
                             })
-                except Exception as e:
+                except Exception:
                     pass
                     
             my_bar.empty()
